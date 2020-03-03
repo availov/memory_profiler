@@ -19,6 +19,7 @@ import time
 import traceback
 import warnings
 import contextlib
+import asyncio
 
 if sys.platform == "win32":
     # any value except signal.CTRL_C_EVENT and signal.CTRL_BREAK_EVENT
@@ -693,6 +694,13 @@ class LineProfiler(object):
         """ Wrap a function to profile it.
         """
 
+        async def f_async(*args, **kwds):
+            self.enable_by_count()
+            try:
+                return await func(*args, **kwds)
+            finally:
+                self.disable_by_count()
+
         def f(*args, **kwds):
             self.enable_by_count()
             try:
@@ -700,7 +708,10 @@ class LineProfiler(object):
             finally:
                 self.disable_by_count()
 
-        return f
+        if asyncio.iscoroutinefunction(func):
+            return f_async
+        else:
+            return f
 
     def runctx(self, cmd, globals, locals):
         """ Profile a single executable statement in the given namespaces.
@@ -1107,13 +1118,23 @@ def profile(func=None, stream=None, precision=1, backend='psutil'):
         if not tracemalloc.is_tracing():
             tracemalloc.start()
     if func is not None:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            prof = LineProfiler(backend=backend)
-            val = prof(func)(*args, **kwargs)
-            show_results(prof, stream=stream, precision=precision)
-            return val
+        if not asyncio.iscoroutinefunction(func):
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                prof = LineProfiler(backend=backend)
+                val = prof(func)(*args, **kwargs)
+                show_results(prof, stream=stream, precision=precision)
 
+                return val
+        else:
+            @wraps(func)
+            async def wrapper(*args, **kwargs):
+                prof = LineProfiler(backend=backend)
+                val = await prof(func)(*args, **kwargs)
+                show_results(prof, stream=stream, precision=precision)
+
+                return val
+            
         return wrapper
     else:
         def inner_wrapper(f):
